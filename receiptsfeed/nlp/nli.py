@@ -1,0 +1,1 @@
+def nli(premise: str, hypothesis: str):\n    return {"label": "neutral", "score": 0.5}\n

@@ -1,0 +1,1 @@
+def retrieve_evidence(query: str):\n    return []\n
