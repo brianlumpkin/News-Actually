@@ -1,1 +1,0 @@
-def review_claim(claim: str):\n    return {"claim": claim, "verdict": "unverified"}\n

@@ -1,1 +1,0 @@
-def score_ragebait(text: str) -> float:\n    return 0.0\n

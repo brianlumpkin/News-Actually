@@ -1,1 +1,0 @@
-def extract_claims(text: str):\n    return []\n
