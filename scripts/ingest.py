@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 import feedparser
+from nlp.heuristics import clickbait_score, ragebait_score, truthiness_score, strip_html
 
 DB_PATH = 'storage/news.db'
 
@@ -19,10 +20,26 @@ CREATE TABLE IF NOT EXISTS articles (
   title TEXT,
   summary TEXT,
   published_at TEXT,
-  source TEXT
+  source TEXT,
+  clickbait_prob REAL DEFAULT 0,
+  ragebait_prob REAL DEFAULT 0,
+  score REAL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
 """
+
+def ensure_columns(cur):
+    cur.execute("PRAGMA table_info(articles)")
+    cols = {r[1] for r in cur.fetchall()}
+    to_add = []
+    if "clickbait_prob" not in cols:
+        to_add.append("ALTER TABLE articles ADD COLUMN clickbait_prob REAL DEFAULT 0")
+    if "ragebait_prob" not in cols:
+        to_add.append("ALTER TABLE articles ADD COLUMN ragebait_prob REAL DEFAULT 0")
+    if "score" not in cols:
+        to_add.append("ALTER TABLE articles ADD COLUMN score REAL DEFAULT 0")
+    for stmt in to_add:
+        cur.execute(stmt)
 
 def iso(dt_struct):
     try:
@@ -42,6 +59,8 @@ def ingest():
     for stmt in SQL_CREATE.split(';'):
         if stmt.strip():
             cur.execute(stmt)
+    ensure_columns(cur)
+
     total_new = 0
 
     for feed_url in FEEDS:
@@ -51,15 +70,26 @@ def ingest():
         for e in parsed.entries:
             url = e.get('link') or ''
             title = (e.get('title') or '').strip()
-            summary = (e.get('summary') or e.get('subtitle') or '').strip()
+            summary_raw = (e.get('summary') or e.get('subtitle') or '').strip()
+            summary = strip_html(summary_raw)
             pub_struct = getattr(e, 'published_parsed', None) or getattr(e, 'updated_parsed', None)
             pub = iso(pub_struct) if pub_struct else datetime.now(timezone.utc).isoformat()
+
+            cb = clickbait_score(title, summary)
+            rb = ragebait_score(title, summary)
+            sc = truthiness_score(cb, rb)
+
             try:
                 cur.execute(
-                    "INSERT OR IGNORE INTO articles(url, title, summary, published_at, source) VALUES(?,?,?,?,?)",
-                    (url, title, summary, pub, feed_title)
+                    "INSERT OR IGNORE INTO articles(url, title, summary, published_at, source, clickbait_prob, ragebait_prob, score) VALUES(?,?,?,?,?,?,?,?)",
+                    (url, title, summary, pub, feed_title, cb, rb, sc)
                 )
-                if cur.rowcount > 0:
+                if cur.rowcount == 0:
+                    cur.execute(
+                        "UPDATE articles SET title=?, summary=?, published_at=?, source=?, clickbait_prob=?, ragebait_prob=?, score=? WHERE url=?",
+                        (title, summary, pub, feed_title, cb, rb, sc, url)
+                    )
+                else:
                     new_count += 1
             except Exception as ex:
                 print(f"[SKIP] {url} – {ex}")
